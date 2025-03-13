@@ -2,10 +2,10 @@
 ## Repo Summary
 
 Terraform Project to:
-- Setup two Ubuntu cloud servers (aws) that run Prometheus in a hierarchical federation model, and scrape some basic metrics from each into the primary instance.
+- Setup two Ubuntu cloud servers in AWS that run Prometheus in a hierarchical federation model, and scrape some basic metrics from each into the primary instance.
 - Use mostly Terraform and ansible
 - Consider security features are in place, and how the automation toolchains inherit that security.
-- Not be a full production-ready implementation, but you should follow best practices with each technology in use.
+- Not be a full production-ready implementation, but should follow best practices with each technology in use.
 - Budget: Max 2 hours
 
 ## How To:
