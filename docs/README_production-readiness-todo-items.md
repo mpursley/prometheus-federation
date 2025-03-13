@@ -71,10 +71,11 @@ Terraform will perform the following actions:
 **I. Infrastructure as Code (IaC) Enhancements**
 
 * **Terraform Modules:**
-    * Create reusable Terraform modules (in `terraform/modules/`) for:
-        * Prometheus servers (instance creation, security groups).
-        * Load balancers.
-        * Route53 records.
+    * Integrate into existing CD/CI, Inventory, Terraform configs/repos.
+      * Use reusable Terraform modules (in `terraform/modules/`) for:
+          * Prometheus servers (instance creation, security groups).
+          * Load balancers.
+          * Route53 records.
 * **Terraform State Management:**
     * Use a remote backend for Terraform state (e.g., AWS S3 with DynamoDB locking).
 * **Infrastructure Testing:**
