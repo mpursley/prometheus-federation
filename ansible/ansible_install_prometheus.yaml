@@ -1,0 +1,225 @@
+---
+- hosts: prometheus_servers
+  become: true  # Run tasks with sudo
+  tasks:
+
+    - name: Wait 60 seconds for EC2 instances to get public IPs
+      pause:
+        seconds: 60
+        prompt: "Pausing for 60 seconds to allow EC2 instances to get public IPs..."
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install Prometheus dependencies (unzip)
+      apt:
+        name: unzip
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create Prometheus user
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+
+    - name: Create Prometheus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: 0755
+      with_items:
+        - /etc/prometheus
+        - /var/lib/prometheus
+
+    - name: Download Prometheus
+      get_url:
+        url: "https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz"
+        dest: /tmp/prometheus.tar.gz
+        mode: 0755
+
+    - name: Extract Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Move Prometheus binaries
+      copy:
+        src: "/tmp/prometheus-2.47.0.linux-amd64/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        owner: prometheus
+        group: prometheus
+        mode: 0755
+        remote_src: yes
+      with_items:
+        - prometheus
+        - promtool
+
+    - name: Move Prometheus configuration files
+      copy:
+        src: "/tmp/prometheus-2.47.0.linux-amd64/{{ item }}"
+        dest: "/etc/prometheus/{{ item }}"
+        owner: prometheus
+        group: prometheus
+        mode: 0644
+        remote_src: yes
+      with_items:
+        - consoles
+        - console_libraries
+
+    - name: Create prometheus.yml (Primary)
+      copy:
+        dest: "/etc/prometheus/prometheus.yml"
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+              relabel_configs:
+                - target_label: source
+                  replacement: prometheus-primary
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['localhost:9100']
+              relabel_configs:
+                - target_label: source
+                  replacement: prometheus-primary
+        owner: prometheus
+        group: prometheus
+        mode: 0644
+      when: inventory_hostname == "prometheus-primary"
+
+    - name: Create prometheus.yml (Secondary)
+      copy:
+        dest: "/etc/prometheus/prometheus.yml"
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['localhost:9100']
+        owner: prometheus
+        group: prometheus
+        mode: 0644
+      when: inventory_hostname == "prometheus-secondary"
+
+    - name: Create federation scrape config (Primary)
+      blockinfile:
+          insertafter: "scrape_configs:"
+          path: /etc/prometheus/prometheus.yml
+          block: |2
+              - job_name: 'federate'
+                honor_labels: true
+                metrics_path: '/federate'
+                params:
+                  'match[]':
+                    - '{job="prometheus"}'
+                    - '{job="node_exporter"}'
+                static_configs:
+                  - targets: ['{{ hostvars["prometheus-secondary"]["ansible_host"] }}:9090']
+                relabel_configs:
+                  - source_labels: [__address__]
+                    target_label: source
+                    replacement: promtheus_secondary
+          marker: "# {mark} ANSIBLE MANAGED BLOCK - FEDERATION"
+
+      when: inventory_hostname == "prometheus-primary"
+
+    - name: Create Prometheus systemd service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus \
+              --config.file /etc/prometheus/prometheus.yml \
+              --storage.tsdb.path /var/lib/prometheus/ \
+              --web.console.templates=/etc/prometheus/consoles \
+              --web.console.libraries=/etc/prometheus/console_libraries
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Prometheus service
+      service:
+        name: prometheus
+        state: started
+        enabled: yes
+
+    - name: Download Node Exporter
+      get_url:
+          url: "https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz"
+          dest: /tmp/node_exporter.tar.gz
+          mode: '0755'
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Move Node Exporter binary
+      copy:
+        src: /tmp/node_exporter-1.9.0.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        owner: prometheus
+        group: prometheus
+        mode: 0755
+        remote_src: yes
+
+    - name: Create Node Exporter systemd service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Reload systemd (node_exporter)
+      systemd:
+         daemon_reload: yes
+
+    - name: Start Node Exporter
+      service:
+        name: node_exporter
+        state: started
+        enabled: yes
